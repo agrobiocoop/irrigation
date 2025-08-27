@@ -1,69 +1,44 @@
 import streamlit as st
 import requests
-import pandas as pd
-from datetime import date
+import math
 
-# Συντελεστές κατανάλωσης νερού ανά ηλικία (m³/ημέρα)
-AGE_WATER_FACTORS = {
-    1: 5,
-    2: 10,
-    3: 20,
-    5: 40,
-    10: 70
+# Συντελεστές Kc ανά ηλικία (προσεγγιστικά)
+KC_BY_AGE = {
+    1: 0.55,
+    2: 0.60,
+    3: 0.65,
+    5: 0.75,
+    10: 0.90
 }
-
-# Συντελεστές ανά τύπο εδάφους
-SOIL_FACTORS = {
-    "Αμμώδες": 1.2,
-    "Αμμοπηλώδες": 1.0,
-    "Πηλώδες": 0.8
-}
-
-# Συντεταγμένες Βατόλακος Χανίων
-LAT, LON = 35.46, 23.95
-
-st.title("🌱 Υπολογισμός Άρδευσης Αβοκάντο")
-
-# Είσοδοι χρήστη
-age = st.selectbox("Ηλικία δέντρου (έτη):", [1, 2, 3, 5, 10])
-soil = st.selectbox("Τύπος εδάφους:", list(SOIL_FACTORS.keys()))
-
-# Φέρνουμε meteo δεδομένα
-url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&daily=temperature_2m_max,precipitation_sum&timezone=auto"
-response = requests.get(url).json()
-
-today = date.today().isoformat()
-try:
-    tmax = response["daily"]["temperature_2m_max"][0]
-    rain = response["daily"]["precipitation_sum"][0]
-except Exception:
-    tmax, rain = 25, 0  # default values αν δεν έχει δεδομένα
 
 # Υπολογισμός άρδευσης
-base_need = AGE_WATER_FACTORS[age]
-soil_factor = SOIL_FACTORS[soil]
+def calculate_irrigation(eto_mm, age, canopy_diameter):
+    kc = KC_BY_AGE.get(age, 0.8)
+    area = math.pi * (canopy_diameter / 2) ** 2  # m²
+    liters_per_day = eto_mm * kc * area
+    return liters_per_day
 
-water_need = base_need * soil_factor
+# Λήψη δεδομένων ETo από Open-Meteo
+def get_eto(lat, lon):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "daily": "evapotranspiration",
+        "timezone": "auto"
+    }
+    r = requests.get(url, params=params)
+    data = r.json()
+    eto_today = data["daily"]["evapotranspiration"][0]  # mm/day
+    return eto_today
 
-# Αφαιρούμε βροχόπτωση (mm -> λίτρα/m² -> m³/δέντρο περίπου)
-# απλουστευμένη παραδοχή: 1 mm = 1 λίτρο/m²
-effective_rain = max(0, rain * 0.5)  # 50% απορροφησιμότητα
-water_need = max(0, water_need - effective_rain)
+# Streamlit UI
+st.title("Υπολογιστής Άρδευσης Αβοκάντο 🌱💧")
 
-st.subheader("💧 Αποτελέσματα")
-st.write(f"Ημερήσια ανάγκη: **{water_need:.2f} m³/δέντρο**")
-st.write(f"(Tmax: {tmax}°C, Βροχή: {rain} mm)")
+age = st.selectbox("Ηλικία δέντρου (έτη):", [1, 2, 3, 5, 10])
+canopy_diameter = st.number_input("Διάμετρος κόμης (m):", min_value=0.2, max_value=12.0, value=1.0, step=0.1)
 
-# Αποθήκευση σε αρχείο CSV
-data = {
-    "date": [today],
-    "age": [age],
-    "soil": [soil],
-    "tmax": [tmax],
-    "rain": [rain],
-    "water_need_m3": [water_need]
-}
-df = pd.DataFrame(data)
-df.to_csv("irrigation_log.csv", mode="a", header=False, index=False)
-
-st.success("✅ Τα δεδομένα αποθηκεύτηκαν στο irrigation_log.csv")
+if st.button("Υπολόγισε"):
+    eto = get_eto(35.4239, 23.9237)  # Βατόλακκος Χανίων
+    water_liters = calculate_irrigation(eto, age, canopy_diameter)
+    st.success(f"Το δέντρο ηλικίας {age} ετών χρειάζεται περίπου {water_liters:.1f} λίτρα/ημέρα 💧")
